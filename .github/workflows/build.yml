@@ -34,7 +34,7 @@ jobs:
   # The engine over a real ADB connection to an Android TV emulator.
   tv-emulator:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -63,9 +63,13 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           disable-animations: true
           # The emulator serves one ADB client at a time, so stop the runner's own adb server first.
+          # A normal shutdown can hang until the job times out, so stop it by force after the test.
+          # Each line only runs if the one before it succeeded, so a failed test still fails the job.
           script: |
             adb kill-server
             ./gradlew :adb:test --no-daemon --rerun-tasks
+            pkill -9 qemu-system || true
+            pkill -9 emulator || true
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
