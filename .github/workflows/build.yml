@@ -51,8 +51,12 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      # This step can hang after the test, once the emulator has stopped, so it may overrun its limit.
+      # The next step decides whether the job passes, from the test results.
       - name: Test against the emulator
         uses: reactivecircus/android-emulator-runner@v2
+        continue-on-error: true
+        timeout-minutes: 12
         env:
           TVSTUDIO_E2E_HOST: localhost
         with:
@@ -63,13 +67,25 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           disable-animations: true
           # The emulator serves one ADB client at a time, so stop the runner's own adb server first.
-          # A normal shutdown can hang until the job times out, so stop it by force after the test.
-          # Each line only runs if the one before it succeeded, so a failed test still fails the job.
+          # Afterwards, stop the emulator's processes so the step can usually exit by itself.
           script: |
             adb kill-server
             ./gradlew :adb:test --no-daemon --rerun-tasks
             pkill -9 qemu-system || true
             pkill -9 emulator || true
+            pkill -9 crashpad_handler || true
+            adb start-server
+
+      - name: Check the emulator test passed
+        run: |
+          results=adb/build/test-results/test/TEST-com.tvstudio.adb.EmulatorE2ETest.xml
+          test -f "$results" || { echo "The emulator test didn't produce results."; exit 1; }
+          grep -q 'tests="2" skipped="0" failures="0" errors="0"' "$results" || {
+            echo "The emulator test failed or was skipped:"
+            head -n 3 "$results"
+            exit 1
+          }
+          echo "The emulator test passed."
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
