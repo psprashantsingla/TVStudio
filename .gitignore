@@ -1,0 +1,23 @@
+# Build output
+.gradle/
+.kotlin/
+build/
+*.apk
+*.aab
+
+# Local machine settings
+local.properties
+.idea/
+*.iml
+.DS_Store
+
+# Secrets: never commit these, this repository is public
+*.jks
+*.keystore
+keystore.properties
+adbkey
+adbkey.pub
+.env
+
+# Python
+__pycache__/

@@ -1,0 +1,103 @@
+name: Build TVStudio
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Run tests
+        run: ./gradlew :core:test :adb:test --no-daemon
+
+      - name: Build APK
+        run: ./gradlew :app:assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TVStudio-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+
+  # The engine over a real ADB connection to an Android TV emulator.
+  tv-emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Test against the emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          TVSTUDIO_E2E_HOST: localhost
+        with:
+          api-level: 30
+          target: android-tv
+          arch: x86
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          # The emulator serves one ADB client at a time, so stop the runner's own adb server first.
+          script: |
+            adb kill-server
+            ./gradlew :adb:test --no-daemon --rerun-tasks
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, tv-emulator]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build signed APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.TVSTUDIO_KEYSTORE_BASE64 }}
+          TVSTUDIO_KEYSTORE_PASSWORD: ${{ secrets.TVSTUDIO_KEYSTORE_PASSWORD }}
+          TVSTUDIO_KEY_ALIAS: ${{ secrets.TVSTUDIO_KEY_ALIAS }}
+          TVSTUDIO_KEY_PASSWORD: ${{ secrets.TVSTUDIO_KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_BASE64" || { echo "Add the TVSTUDIO_KEYSTORE_BASE64 secret first (see README)."; exit 1; }
+          export TVSTUDIO_KEYSTORE_PATH="$RUNNER_TEMP/release.keystore"
+          echo "$KEYSTORE_BASE64" | base64 -d > "$TVSTUDIO_KEYSTORE_PATH"
+          ./gradlew :app:assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk TVStudio.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: TVStudio.apk
+          body: Download TVStudio.apk and install it on your Android phone. Read the risks in the README first.
